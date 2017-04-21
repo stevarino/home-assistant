@@ -17,7 +17,7 @@ import voluptuous as vol
 
 DOMAIN = 'tellduslive'
 
-REQUIREMENTS = ['tellduslive==0.1.13']
+REQUIREMENTS = ['tellduslive==0.3.4']
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,13 +98,13 @@ class TelldusLiveClient(object):
         try:
             self._sync()
         finally:
-            track_point_in_utc_time(self._hass,
-                                    self.update,
-                                    now + self._interval)
+            track_point_in_utc_time(
+                self._hass, self.update, utcnow() + self._interval)
 
     def _sync(self):
         """Update local list of devices."""
-        self._client.update()
+        if not self._client.update():
+            _LOGGER.warning('Failed request')
 
         def identify_device(device):
             """Find out what type of HA component to create."""
@@ -122,19 +122,16 @@ class TelldusLiveClient(object):
 
         def discover(device_id, component):
             """Discover the component."""
-            discovery.load_platform(self._hass,
-                                    component,
-                                    DOMAIN,
-                                    [device_id],
-                                    self._config)
+            discovery.load_platform(
+                self._hass, component, DOMAIN, [device_id], self._config)
 
         known_ids = set([entity.device_id for entity in self.entities])
         for device in self._client.devices:
             if device.device_id in known_ids:
                 continue
             if device.is_sensor:
-                for item_id in device.items:
-                    discover((device.device_id,) + item_id,
+                for item in device.items:
+                    discover((device.device_id, item.name, item.scale),
                              'sensor')
             else:
                 discover(device.device_id,
@@ -145,8 +142,7 @@ class TelldusLiveClient(object):
 
     def device(self, device_id):
         """Return device representation."""
-        import tellduslive
-        return tellduslive.Device(self._client, device_id)
+        return self._client.device(device_id)
 
     def is_available(self, device_id):
         """Return device availability."""
@@ -161,10 +157,13 @@ class TelldusLiveEntity(Entity):
         self._id = device_id
         self._client = hass.data[DOMAIN]
         self._client.entities.append(self)
+        self._name = self.device.name
         _LOGGER.debug('Created device %s', self)
 
     def changed(self):
         """A property of the device might have changed."""
+        if self.device.name:
+            self._name = self.device.name
         self.schedule_update_ha_state()
 
     @property
@@ -195,7 +194,7 @@ class TelldusLiveEntity(Entity):
     @property
     def name(self):
         """Return name of device."""
-        return self.device.name or DEVICE_DEFAULT_NAME
+        return self._name or DEVICE_DEFAULT_NAME
 
     @property
     def available(self):
@@ -221,5 +220,5 @@ class TelldusLiveEntity(Entity):
     @property
     def _last_updated(self):
         """Return the last update of a device."""
-        return str(datetime.fromtimestamp(self.device.last_updated)) \
-            if self.device.last_updated else None
+        return str(datetime.fromtimestamp(self.device.lastUpdated)) \
+            if self.device.lastUpdated else None

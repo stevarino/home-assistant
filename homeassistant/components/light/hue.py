@@ -10,7 +10,6 @@ import os
 import random
 import socket
 from datetime import timedelta
-from urllib.parse import urlparse
 
 import voluptuous as vol
 
@@ -47,9 +46,20 @@ MIN_TIME_BETWEEN_FORCED_SCANS = timedelta(milliseconds=100)
 
 PHUE_CONFIG_FILE = 'phue.conf'
 
-SUPPORT_HUE = (SUPPORT_BRIGHTNESS | SUPPORT_COLOR_TEMP | SUPPORT_EFFECT |
-               SUPPORT_FLASH | SUPPORT_RGB_COLOR | SUPPORT_TRANSITION |
-               SUPPORT_XY_COLOR)
+SUPPORT_HUE_ON_OFF = (SUPPORT_FLASH | SUPPORT_TRANSITION)
+SUPPORT_HUE_DIMMABLE = (SUPPORT_HUE_ON_OFF | SUPPORT_BRIGHTNESS)
+SUPPORT_HUE_COLOR_TEMP = (SUPPORT_HUE_DIMMABLE | SUPPORT_COLOR_TEMP)
+SUPPORT_HUE_COLOR = (SUPPORT_HUE_DIMMABLE | SUPPORT_EFFECT |
+                     SUPPORT_RGB_COLOR | SUPPORT_XY_COLOR)
+SUPPORT_HUE_EXTENDED = (SUPPORT_HUE_COLOR_TEMP | SUPPORT_HUE_COLOR)
+
+SUPPORT_HUE = {
+    'Extended color light': SUPPORT_HUE_EXTENDED,
+    'Color light': SUPPORT_HUE_COLOR,
+    'Dimmable light': SUPPORT_HUE_DIMMABLE,
+    'On/Off plug-in unit': SUPPORT_HUE_ON_OFF,
+    'Color temperature light': SUPPORT_HUE_COLOR_TEMP
+    }
 
 CONF_ALLOW_IN_EMULATED_HUE = "allow_in_emulated_hue"
 DEFAULT_ALLOW_IN_EMULATED_HUE = True
@@ -59,11 +69,9 @@ DEFAULT_ALLOW_HUE_GROUPS = True
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_HOST): cv.string,
-    vol.Optional(CONF_ALLOW_UNREACHABLE,
-                 default=DEFAULT_ALLOW_UNREACHABLE): cv.boolean,
-    vol.Optional(CONF_FILENAME, default=PHUE_CONFIG_FILE): cv.string,
-    vol.Optional(CONF_ALLOW_IN_EMULATED_HUE,
-                 default=DEFAULT_ALLOW_IN_EMULATED_HUE): cv.boolean,
+    vol.Optional(CONF_ALLOW_UNREACHABLE): cv.boolean,
+    vol.Optional(CONF_FILENAME): cv.string,
+    vol.Optional(CONF_ALLOW_IN_EMULATED_HUE): cv.boolean,
     vol.Optional(CONF_ALLOW_HUE_GROUPS,
                  default=DEFAULT_ALLOW_HUE_GROUPS): cv.boolean,
 })
@@ -98,17 +106,19 @@ def _find_host_from_config(hass, filename=PHUE_CONFIG_FILE):
 def setup_platform(hass, config, add_devices, discovery_info=None):
     """Setup the Hue lights."""
     # Default needed in case of discovery
-    filename = config.get(CONF_FILENAME)
-    allow_unreachable = config.get(CONF_ALLOW_UNREACHABLE)
-    allow_in_emulated_hue = config.get(CONF_ALLOW_IN_EMULATED_HUE)
+    filename = config.get(CONF_FILENAME, PHUE_CONFIG_FILE)
+    allow_unreachable = config.get(CONF_ALLOW_UNREACHABLE,
+                                   DEFAULT_ALLOW_UNREACHABLE)
+    allow_in_emulated_hue = config.get(CONF_ALLOW_IN_EMULATED_HUE,
+                                       DEFAULT_ALLOW_IN_EMULATED_HUE)
     allow_hue_groups = config.get(CONF_ALLOW_HUE_GROUPS)
 
     if discovery_info is not None:
-        host = urlparse(discovery_info[1]).hostname
-
-        if "HASS Bridge" in discovery_info[0]:
+        if "HASS Bridge" in discovery_info.get('name', ''):
             _LOGGER.info('Emulated hue found, will not add')
             return False
+
+        host = discovery_info.get('host')
     else:
         host = config.get(CONF_HOST, None)
 
@@ -301,8 +311,14 @@ class HueLight(Light):
     @property
     def unique_id(self):
         """Return the ID of this Hue light."""
-        return "{}.{}".format(
-            self.__class__, self.info.get('uniqueid', self.name))
+        lid = self.info.get('uniqueid')
+
+        if lid is None:
+            default_type = 'Group' if self.is_group else 'Light'
+            ltype = self.info.get('type', default_type)
+            lid = '{}.{}.{}'.format(self.name, ltype, self.light_id)
+
+        return '{}.{}'.format(self.__class__, lid)
 
     @property
     def name(self):
@@ -348,22 +364,42 @@ class HueLight(Light):
     @property
     def supported_features(self):
         """Flag supported features."""
-        return SUPPORT_HUE
+        return SUPPORT_HUE.get(self.info.get('type'), SUPPORT_HUE_EXTENDED)
+
+    @property
+    def effect_list(self):
+        """Return the list of supported effects."""
+        return [EFFECT_COLORLOOP, EFFECT_RANDOM]
 
     def turn_on(self, **kwargs):
         """Turn the specified or all lights on."""
         command = {'on': True}
 
         if ATTR_TRANSITION in kwargs:
-            command['transitiontime'] = kwargs[ATTR_TRANSITION] * 10
+            command['transitiontime'] = int(kwargs[ATTR_TRANSITION] * 10)
 
         if ATTR_XY_COLOR in kwargs:
-            command['xy'] = kwargs[ATTR_XY_COLOR]
+            if self.info.get('manufacturername') == "OSRAM":
+                hsv = color_util.color_xy_brightness_to_hsv(
+                    *kwargs[ATTR_XY_COLOR],
+                    ibrightness=self.info['bri'])
+                command['hue'] = hsv[0]
+                command['sat'] = hsv[1]
+                command['bri'] = hsv[2]
+            else:
+                command['xy'] = kwargs[ATTR_XY_COLOR]
         elif ATTR_RGB_COLOR in kwargs:
-            xyb = color_util.color_RGB_to_xy(
-                *(int(val) for val in kwargs[ATTR_RGB_COLOR]))
-            command['xy'] = xyb[0], xyb[1]
-            command['bri'] = xyb[2]
+            if self.info.get('manufacturername') == "OSRAM":
+                hsv = color_util.color_RGB_to_hsv(
+                    *(int(val) for val in kwargs[ATTR_RGB_COLOR]))
+                command['hue'] = hsv[0]
+                command['sat'] = hsv[1]
+                command['bri'] = hsv[2]
+            else:
+                xyb = color_util.color_RGB_to_xy(
+                    *(int(val) for val in kwargs[ATTR_RGB_COLOR]))
+                command['xy'] = xyb[0], xyb[1]
+                command['bri'] = xyb[2]
 
         if ATTR_BRIGHTNESS in kwargs:
             command['bri'] = kwargs[ATTR_BRIGHTNESS]
@@ -390,7 +426,8 @@ class HueLight(Light):
             command['hue'] = random.randrange(0, 65535)
             command['sat'] = random.randrange(150, 254)
         elif self.bridge_type == 'hue':
-            command['effect'] = 'none'
+            if self.info.get('manufacturername') != "OSRAM":
+                command['effect'] = 'none'
 
         self._command_func(self.light_id, command)
 
@@ -399,9 +436,7 @@ class HueLight(Light):
         command = {'on': False}
 
         if ATTR_TRANSITION in kwargs:
-            # Transition time is in 1/10th seconds and cannot exceed
-            # 900 seconds.
-            command['transitiontime'] = min(9000, kwargs[ATTR_TRANSITION] * 10)
+            command['transitiontime'] = int(kwargs[ATTR_TRANSITION] * 10)
 
         flash = kwargs.get(ATTR_FLASH)
 

@@ -28,7 +28,9 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "broadlink"
 DEFAULT_NAME = 'Broadlink switch'
 DEFAULT_TIMEOUT = 10
+DEFAULT_RETRY = 3
 SERVICE_LEARN = "learn_command"
+SERVICE_SEND = "send_packet"
 
 RM_TYPES = ["rm", "rm2", "rm_mini", "rm_pro_phicomm", "rm2_home_plus",
             "rm2_home_plus_gdt", "rm2_pro_plus", "rm2_pro_plus2",
@@ -101,10 +103,30 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
                                              "Did not received any signal",
                                              title='Broadlink switch')
 
+    @asyncio.coroutine
+    def _send_packet(call):
+        packets = call.data.get('packet', [])
+        for packet in packets:
+            for retry in range(DEFAULT_RETRY):
+                try:
+                    payload = b64decode(packet)
+                    yield from hass.loop.run_in_executor(
+                        None, broadlink_device.send_data, payload)
+                    break
+                except (socket.timeout, ValueError):
+                    try:
+                        yield from hass.loop.run_in_executor(
+                            None, broadlink_device.auth)
+                    except socket.timeout:
+                        if retry == DEFAULT_RETRY-1:
+                            _LOGGER.error("Failed to send packet to device.")
+
     if switch_type in RM_TYPES:
         broadlink_device = broadlink.rm((ip_addr, 80), mac_addr)
-        hass.services.register(DOMAIN, SERVICE_LEARN + '_' + ip_addr,
-                               _learn_command)
+        hass.services.register(DOMAIN, SERVICE_LEARN + '_' +
+                               ip_addr.replace('.', '_'), _learn_command)
+        hass.services.register(DOMAIN, SERVICE_SEND + '_' +
+                               ip_addr.replace('.', '_'), _send_packet)
         switches = []
         for object_id, device_config in devices.items():
             switches.append(
@@ -166,13 +188,13 @@ class BroadlinkRMSwitch(SwitchDevice):
         """Turn the device on."""
         if self._sendpacket(self._command_on):
             self._state = True
-            self.update_ha_state()
+            self.schedule_update_ha_state()
 
     def turn_off(self, **kwargs):
         """Turn the device off."""
         if self._sendpacket(self._command_off):
             self._state = False
-            self.update_ha_state()
+            self.schedule_update_ha_state()
 
     def _sendpacket(self, packet, retry=2):
         """Send packet to device."""
@@ -187,7 +209,7 @@ class BroadlinkRMSwitch(SwitchDevice):
                 return False
             if not self._auth():
                 return False
-            return self._sendpacket(packet, max(0, retry-1))
+            return self._sendpacket(packet, retry-1)
         return True
 
     def _auth(self, retry=2):
@@ -196,7 +218,7 @@ class BroadlinkRMSwitch(SwitchDevice):
         except socket.timeout:
             auth = False
         if not auth and retry > 0:
-            return self._auth(max(0, retry-1))
+            return self._auth(retry-1)
         return auth
 
 
@@ -219,7 +241,7 @@ class BroadlinkSP1Switch(BroadlinkRMSwitch):
                 return False
             if not self._auth():
                 return False
-            return self._sendpacket(packet, max(0, retry-1))
+            return self._sendpacket(packet, retry-1)
         return True
 
 
@@ -253,7 +275,7 @@ class BroadlinkSP2Switch(BroadlinkSP1Switch):
                 return
             if not self._auth():
                 return
-            return self._update(max(0, retry-1))
+            return self._update(retry-1)
         if state is None and retry > 0:
-            return self._update(max(0, retry-1))
+            return self._update(retry-1)
         self._state = state

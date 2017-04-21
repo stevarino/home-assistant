@@ -59,7 +59,7 @@ ATTR_VALUE = "value"
 SERVICE_WRITE_REGISTER_SCHEMA = vol.Schema({
     vol.Required(ATTR_UNIT): cv.positive_int,
     vol.Required(ATTR_ADDRESS): cv.positive_int,
-    vol.Required(ATTR_VALUE): cv.positive_int
+    vol.Required(ATTR_VALUE): vol.All(cv.ensure_list, [cv.positive_int])
 })
 
 
@@ -154,6 +154,15 @@ class ModbusHub(object):
         with self._lock:
             kwargs = {'unit': unit} if unit else {}
             return self._client.read_coils(
+                address,
+                count,
+                **kwargs)
+
+    def read_input_registers(self, unit, address, count):
+        """Read input registers."""
+        with self._lock:
+            kwargs = {'unit': unit} if unit else {}
+            return self._client.read_input_registers(
                 address,
                 count,
                 **kwargs)

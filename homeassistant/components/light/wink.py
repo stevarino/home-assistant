@@ -9,7 +9,7 @@ import colorsys
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS, ATTR_COLOR_TEMP, ATTR_RGB_COLOR, SUPPORT_BRIGHTNESS,
     SUPPORT_COLOR_TEMP, SUPPORT_RGB_COLOR, Light)
-from homeassistant.components.wink import WinkDevice
+from homeassistant.components.wink import WinkDevice, DOMAIN
 from homeassistant.util import color as color_util
 from homeassistant.util.color import \
     color_temperature_mired_to_kelvin as mired_to_kelvin
@@ -18,12 +18,17 @@ DEPENDENCIES = ['wink']
 
 SUPPORT_WINK = SUPPORT_BRIGHTNESS | SUPPORT_COLOR_TEMP | SUPPORT_RGB_COLOR
 
+RGB_MODES = ['hsb', 'rgb']
+
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
     """Setup the Wink lights."""
     import pywink
 
-    add_devices(WinkLight(light, hass) for light in pywink.get_light_bulbs())
+    for light in pywink.get_light_bulbs():
+        _id = light.object_id() + light.name()
+        if _id not in hass.data[DOMAIN]['unique_ids']:
+            add_devices([WinkLight(light, hass)])
 
 
 class WinkLight(WinkDevice, Light):
@@ -31,7 +36,7 @@ class WinkLight(WinkDevice, Light):
 
     def __init__(self, wink, hass):
         """Initialize the Wink device."""
-        WinkDevice.__init__(self, wink, hass)
+        super().__init__(wink, hass)
 
     @property
     def is_on(self):
@@ -51,6 +56,8 @@ class WinkLight(WinkDevice, Light):
         """Current bulb color in RGB."""
         if not self.wink.supports_hue_saturation():
             return None
+        elif self.wink.color_model() not in RGB_MODES:
+            return False
         else:
             hue = self.wink.color_hue()
             saturation = self.wink.color_saturation()

@@ -2,8 +2,9 @@
 Offer sun based automation rules.
 
 For more details about this automation rule, please refer to the documentation
-at https://home-assistant.io/components/automation/#sun-trigger
+at https://home-assistant.io/docs/automation/trigger/#sun-trigger
 """
+import asyncio
 from datetime import timedelta
 import logging
 
@@ -26,6 +27,7 @@ TRIGGER_SCHEMA = vol.Schema({
 })
 
 
+@asyncio.coroutine
 def async_trigger(hass, config, action):
     """Listen for events based on configuration."""
     event = config.get(CONF_EVENT)

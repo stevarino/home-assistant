@@ -9,8 +9,10 @@ import logging
 from homeassistant.const import (
     TEMP_CELSIUS, TEMP_FAHRENHEIT)
 from homeassistant.helpers.entity import Entity
+from homeassistant.components.sensor import ENTITY_ID_FORMAT
+from homeassistant.util import convert
 from homeassistant.components.vera import (
-    VeraDevice, VERA_DEVICES, VERA_CONTROLLER)
+    VERA_CONTROLLER, VERA_DEVICES, VeraDevice)
 
 DEPENDENCIES = ['vera']
 
@@ -32,6 +34,7 @@ class VeraSensor(VeraDevice, Entity):
         self.current_value = None
         self._temperature_units = None
         VeraDevice.__init__(self, vera_device, controller)
+        self.entity_id = ENTITY_ID_FORMAT.format(self.vera_id)
 
     @property
     def state(self):
@@ -47,6 +50,8 @@ class VeraSensor(VeraDevice, Entity):
             return 'lux'
         elif self.vera_device.category == "Humidity Sensor":
             return '%'
+        elif self.vera_device.category == "Power meter":
+            return 'watts'
 
     def update(self):
         """Update the state."""
@@ -65,6 +70,9 @@ class VeraSensor(VeraDevice, Entity):
             self.current_value = self.vera_device.light
         elif self.vera_device.category == "Humidity Sensor":
             self.current_value = self.vera_device.humidity
+        elif self.vera_device.category == "Power meter":
+            power = convert(self.vera_device.power, float, 0)
+            self.current_value = int(round(power, 0))
         elif self.vera_device.category == "Sensor":
             tripped = self.vera_device.is_tripped
             self.current_value = 'Tripped' if tripped else 'Not Tripped'

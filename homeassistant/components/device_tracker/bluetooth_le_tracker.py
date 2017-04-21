@@ -25,7 +25,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 })
 
 
-def setup_scanner(hass, config, see):
+def setup_scanner(hass, config, see, discovery_info=None):
     """Setup the Bluetooth LE Scanner."""
     # pylint: disable=import-error
     from gattlib import DiscoveryService
@@ -110,7 +110,7 @@ def setup_scanner(hass, config, see):
                     _LOGGER.info("Discovered Bluetooth LE device %s", address)
                     see_device(address, devs[address], new_device=True)
 
-        track_point_in_utc_time(hass, update_ble, now + interval)
+        track_point_in_utc_time(hass, update_ble, dt_util.utcnow() + interval)
 
     update_ble(dt_util.utcnow())
 

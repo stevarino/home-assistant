@@ -36,6 +36,9 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     dev = []
     for droplet in droplets:
         droplet_id = digital_ocean.DIGITAL_OCEAN.get_droplet_id(droplet)
+        if droplet_id is None:
+            _LOGGER.error("Droplet %s is not available", droplet)
+            return False
         dev.append(DigitalOceanBinarySensor(
             digital_ocean.DIGITAL_OCEAN, droplet_id))
 
@@ -63,7 +66,7 @@ class DigitalOceanBinarySensor(BinarySensorDevice):
         return self.data.status == 'active'
 
     @property
-    def sensor_class(self):
+    def device_class(self):
         """Return the class of this sensor."""
         return DEFAULT_SENSOR_CLASS
 

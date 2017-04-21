@@ -3,32 +3,38 @@ import asyncio
 from collections import OrderedDict
 import logging
 import os
+import re
 import shutil
-from types import MappingProxyType
+import sys
 # pylint: disable=unused-import
 from typing import Any, List, Tuple  # NOQA
 
 import voluptuous as vol
+from voluptuous.humanize import humanize_error
 
 from homeassistant.const import (
     CONF_LATITUDE, CONF_LONGITUDE, CONF_NAME, CONF_PACKAGES, CONF_UNIT_SYSTEM,
-    CONF_TIME_ZONE, CONF_CUSTOMIZE, CONF_ELEVATION, CONF_UNIT_SYSTEM_METRIC,
+    CONF_TIME_ZONE, CONF_ELEVATION, CONF_UNIT_SYSTEM_METRIC,
     CONF_UNIT_SYSTEM_IMPERIAL, CONF_TEMPERATURE_UNIT, TEMP_CELSIUS,
-    CONF_ENTITY_ID, __version__)
-from homeassistant.core import DOMAIN as CONF_CORE
+    __version__, CONF_CUSTOMIZE, CONF_CUSTOMIZE_DOMAIN, CONF_CUSTOMIZE_GLOB)
+from homeassistant.core import callback, DOMAIN as CONF_CORE
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.loader import get_component
+from homeassistant.loader import get_component, get_platform
 from homeassistant.util.yaml import load_yaml
 import homeassistant.helpers.config_validation as cv
 from homeassistant.util import dt as date_util, location as loc_util
 from homeassistant.util.unit_system import IMPERIAL_SYSTEM, METRIC_SYSTEM
-from homeassistant.helpers.customize import set_customize
+from homeassistant.helpers.entity_values import EntityValues
+from homeassistant.helpers import config_per_platform, extract_domain_configs
 
 _LOGGER = logging.getLogger(__name__)
 
+DATA_PERSISTENT_ERRORS = 'bootstrap_persistent_errors'
+HA_COMPONENT_URL = '[{}](https://home-assistant.io/components/{}/)'
 YAML_CONFIG_FILE = 'configuration.yaml'
 VERSION_FILE = '.HA_VERSION'
 CONFIG_DIR_NAME = '.homeassistant'
+DATA_CUSTOMIZE = 'hass_customize'
 
 DEFAULT_CORE_CONFIG = (
     # Tuples (attribute, default, auto detect property, description)
@@ -51,6 +57,9 @@ introduction:
 
 # Enables the frontend
 frontend:
+
+# Enables configuration UI
+config:
 
 http:
   # Uncomment this to add a password (recommended!)
@@ -84,28 +93,8 @@ sensor:
 tts:
   platform: google
 
+group: !include groups.yaml
 """
-
-
-CUSTOMIZE_SCHEMA_ENTRY = vol.Schema({
-    vol.Required(CONF_ENTITY_ID): vol.All(
-        cv.ensure_list_csv, vol.Length(min=1), [cv.string], [vol.Lower])
-}, extra=vol.ALLOW_EXTRA)
-
-
-def _convert_old_config(inp: Any) -> List:
-    if not isinstance(inp, dict):
-        return cv.ensure_list(inp)
-    if CONF_ENTITY_ID in inp:
-        return [inp]  # sigle entry
-    res = []
-
-    inp = vol.Schema({cv.match_all: dict})(inp)
-    for key, val in inp.items():
-        val = dict(val)
-        val[CONF_ENTITY_ID] = key
-        res.append(val)
-    return res
 
 
 PACKAGES_CONFIG_SCHEMA = vol.Schema({
@@ -113,7 +102,16 @@ PACKAGES_CONFIG_SCHEMA = vol.Schema({
         {cv.slug: vol.Any(dict, list)})  # Only slugs for component names
 })
 
-CORE_CONFIG_SCHEMA = vol.Schema({
+CUSTOMIZE_CONFIG_SCHEMA = vol.Schema({
+    vol.Optional(CONF_CUSTOMIZE, default={}):
+        vol.Schema({cv.entity_id: dict}),
+    vol.Optional(CONF_CUSTOMIZE_DOMAIN, default={}):
+        vol.Schema({cv.string: dict}),
+    vol.Optional(CONF_CUSTOMIZE_GLOB, default={}):
+        cv.ordered_dict(OrderedDict, cv.string),
+})
+
+CORE_CONFIG_SCHEMA = CUSTOMIZE_CONFIG_SCHEMA.extend({
     CONF_NAME: vol.Coerce(str),
     CONF_LATITUDE: cv.latitude,
     CONF_LONGITUDE: cv.longitude,
@@ -121,9 +119,6 @@ CORE_CONFIG_SCHEMA = vol.Schema({
     vol.Optional(CONF_TEMPERATURE_UNIT): cv.temperature_unit,
     CONF_UNIT_SYSTEM: cv.unit_system,
     CONF_TIME_ZONE: cv.time_zone,
-    vol.Required(CONF_CUSTOMIZE,
-                 default=MappingProxyType({})): vol.All(
-                     _convert_old_config, [CUSTOMIZE_SCHEMA_ENTRY]),
     vol.Optional(CONF_PACKAGES, default={}): PACKAGES_CONFIG_SCHEMA,
 })
 
@@ -157,8 +152,12 @@ def create_default_config(config_dir, detect_location=True):
     Return path to new config file if success, None if failed.
     This method needs to run in an executor.
     """
+    from homeassistant.components.config.group import (
+        CONFIG_PATH as GROUP_CONFIG_PATH)
+
     config_path = os.path.join(config_dir, YAML_CONFIG_FILE)
     version_path = os.path.join(config_dir, VERSION_FILE)
+    group_yaml_path = os.path.join(config_dir, GROUP_CONFIG_PATH)
 
     info = {attr: default for attr, default, _, _ in DEFAULT_CORE_CONFIG}
 
@@ -196,6 +195,9 @@ def create_default_config(config_dir, detect_location=True):
 
         with open(version_path, 'wt') as version_file:
             version_file.write(__version__)
+
+        with open(group_yaml_path, 'w'):
+            pass
 
         return config_path
 
@@ -237,7 +239,11 @@ def load_yaml_config_file(config_path):
 
     This method needs to run in an executor.
     """
-    conf_dict = load_yaml(config_path)
+    try:
+        conf_dict = load_yaml(config_path)
+    except FileNotFoundError as err:
+        raise HomeAssistantError("Config file not found: {}".format(
+            getattr(err, 'filename', err)))
 
     if not isinstance(conf_dict, dict):
         msg = 'The configuration file {} does not contain a dictionary'.format(
@@ -276,6 +282,35 @@ def process_ha_config_upgrade(hass):
         outp.write(__version__)
 
 
+@callback
+def async_log_exception(ex, domain, config, hass):
+    """Generate log exception for config validation.
+
+    This method must be run in the event loop.
+    """
+    message = 'Invalid config for [{}]: '.format(domain)
+    if hass is not None:
+        async_notify_setup_error(hass, domain, True)
+
+    if 'extra keys not allowed' in ex.error_message:
+        message += '[{}] is an invalid option for [{}]. Check: {}->{}.'\
+                   .format(ex.path[-1], domain, domain,
+                           '->'.join(str(m) for m in ex.path))
+    else:
+        message += '{}.'.format(humanize_error(config, ex))
+
+    domain_config = config.get(domain, config)
+    message += " (See {}, line {}). ".format(
+        getattr(domain_config, '__config_file__', '?'),
+        getattr(domain_config, '__line__', '?'))
+
+    if domain != 'homeassistant':
+        message += ('Please check the docs at '
+                    'https://home-assistant.io/components/{}/'.format(domain))
+
+    _LOGGER.error(message)
+
+
 @asyncio.coroutine
 def async_process_ha_core_config(hass, config):
     """Process the [homeassistant] section from the config.
@@ -308,7 +343,29 @@ def async_process_ha_core_config(hass, config):
     if CONF_TIME_ZONE in config:
         set_time_zone(config.get(CONF_TIME_ZONE))
 
-    set_customize(hass, config.get(CONF_CUSTOMIZE) or {})
+    # Customize
+    cust_exact = dict(config[CONF_CUSTOMIZE])
+    cust_domain = dict(config[CONF_CUSTOMIZE_DOMAIN])
+    cust_glob = OrderedDict(config[CONF_CUSTOMIZE_GLOB])
+
+    for name, pkg in config[CONF_PACKAGES].items():
+        pkg_cust = pkg.get(CONF_CORE)
+
+        if pkg_cust is None:
+            continue
+
+        try:
+            pkg_cust = CUSTOMIZE_CONFIG_SCHEMA(pkg_cust)
+        except vol.Invalid:
+            _LOGGER.warning('Package %s contains invalid customize', name)
+            continue
+
+        cust_exact.update(pkg_cust[CONF_CUSTOMIZE])
+        cust_domain.update(pkg_cust[CONF_CUSTOMIZE_DOMAIN])
+        cust_glob.update(pkg_cust[CONF_CUSTOMIZE_GLOB])
+
+    hass.data[DATA_CUSTOMIZE] = \
+        EntityValues(cust_exact, cust_domain, cust_glob)
 
     if CONF_UNIT_SYSTEM in config:
         if config[CONF_UNIT_SYSTEM] == CONF_UNIT_SYSTEM_IMPERIAL:
@@ -407,6 +464,8 @@ def merge_packages_config(config, packages):
     PACKAGES_CONFIG_SCHEMA(packages)
     for pack_name, pack_conf in packages.items():
         for comp_name, comp_conf in pack_conf.items():
+            if comp_name == CONF_CORE:
+                continue
             component = get_component(comp_name)
 
             if component is None:
@@ -459,3 +518,106 @@ def merge_packages_config(config, packages):
             config[comp_name] = comp_conf
 
     return config
+
+
+@callback
+def async_process_component_config(hass, config, domain):
+    """Check component config and return processed config.
+
+    Raise a vol.Invalid exception on error.
+
+    This method must be run in the event loop.
+    """
+    component = get_component(domain)
+
+    if hasattr(component, 'CONFIG_SCHEMA'):
+        try:
+            config = component.CONFIG_SCHEMA(config)
+        except vol.Invalid as ex:
+            async_log_exception(ex, domain, config, hass)
+            return None
+
+    elif hasattr(component, 'PLATFORM_SCHEMA'):
+        platforms = []
+        for p_name, p_config in config_per_platform(config, domain):
+            # Validate component specific platform schema
+            try:
+                p_validated = component.PLATFORM_SCHEMA(p_config)
+            except vol.Invalid as ex:
+                async_log_exception(ex, domain, config, hass)
+                continue
+
+            # Not all platform components follow same pattern for platforms
+            # So if p_name is None we are not going to validate platform
+            # (the automation component is one of them)
+            if p_name is None:
+                platforms.append(p_validated)
+                continue
+
+            platform = get_platform(domain, p_name)
+
+            if platform is None:
+                continue
+
+            # Validate platform specific schema
+            if hasattr(platform, 'PLATFORM_SCHEMA'):
+                # pylint: disable=no-member
+                try:
+                    p_validated = platform.PLATFORM_SCHEMA(p_validated)
+                except vol.Invalid as ex:
+                    async_log_exception(ex, '{}.{}'.format(domain, p_name),
+                                        p_validated, hass)
+                    continue
+
+            platforms.append(p_validated)
+
+        # Create a copy of the configuration with all config for current
+        # component removed and add validated config back in.
+        filter_keys = extract_domain_configs(config, domain)
+        config = {key: value for key, value in config.items()
+                  if key not in filter_keys}
+        config[domain] = platforms
+
+    return config
+
+
+@asyncio.coroutine
+def async_check_ha_config_file(hass):
+    """Check if HA config file valid.
+
+    This method is a coroutine.
+    """
+    proc = yield from asyncio.create_subprocess_exec(
+        sys.executable, '-m', 'homeassistant', '--script',
+        'check_config', '--config', hass.config.config_dir,
+        stdout=asyncio.subprocess.PIPE, loop=hass.loop)
+    # Wait for the subprocess exit
+    stdout_data, dummy = yield from proc.communicate()
+    result = yield from proc.wait()
+
+    if not result:
+        return None
+
+    return re.sub(r'\033\[[^m]*m', '', str(stdout_data, 'utf-8'))
+
+
+@callback
+def async_notify_setup_error(hass, component, link=False):
+    """Print a persistent notification.
+
+    This method must be run in the event loop.
+    """
+    from homeassistant.components import persistent_notification
+
+    errors = hass.data.get(DATA_PERSISTENT_ERRORS)
+
+    if errors is None:
+        errors = hass.data[DATA_PERSISTENT_ERRORS] = {}
+
+    errors[component] = errors.get(component) or link
+    _lst = [HA_COMPONENT_URL.format(name.replace('_', '-'), name)
+            if link else name for name, link in errors.items()]
+    message = ('The following components and platforms could not be set up:\n'
+               '* ' + '\n* '.join(list(_lst)) + '\nPlease check your config')
+    persistent_notification.async_create(
+        hass, message, 'Invalid config', 'invalid_config')

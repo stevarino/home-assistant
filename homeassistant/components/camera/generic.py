@@ -44,7 +44,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 # pylint: disable=unused-argument
 def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
     """Setup a generic IP Camera."""
-    yield from async_add_devices([GenericCamera(hass, config)])
+    async_add_devices([GenericCamera(hass, config)])
 
 
 class GenericCamera(Camera):
@@ -107,7 +107,6 @@ class GenericCamera(Camera):
                 None, fetch)
         # async
         else:
-            response = None
             try:
                 websession = async_get_clientsession(self.hass)
                 with async_timeout.timeout(10, loop=self.hass.loop):
@@ -117,13 +116,9 @@ class GenericCamera(Camera):
             except asyncio.TimeoutError:
                 _LOGGER.error('Timeout getting camera image')
                 return self._last_image
-            except (aiohttp.errors.ClientError,
-                    aiohttp.errors.ClientDisconnectedError) as err:
+            except aiohttp.ClientError as err:
                 _LOGGER.error('Error getting new camera image: %s', err)
                 return self._last_image
-            finally:
-                if response is not None:
-                    self.hass.async_add_job(response.release())
 
         self._last_url = url
         return self._last_image

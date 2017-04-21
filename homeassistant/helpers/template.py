@@ -387,6 +387,14 @@ def timestamp_utc(value):
         return value
 
 
+def forgiving_as_timestamp(value):
+    """Try to convert value to timestamp."""
+    try:
+        return dt_util.as_timestamp(value)
+    except (ValueError, TypeError):
+        return None
+
+
 def strptime(string, fmt):
     """Parse a time string to datetime."""
     try:
@@ -425,9 +433,11 @@ ENV.filters['timestamp_custom'] = timestamp_custom
 ENV.filters['timestamp_local'] = timestamp_local
 ENV.filters['timestamp_utc'] = timestamp_utc
 ENV.filters['is_defined'] = fail_when_undefined
+ENV.filters['max'] = max
+ENV.filters['min'] = min
 ENV.globals['float'] = forgiving_float
 ENV.globals['now'] = dt_util.now
 ENV.globals['utcnow'] = dt_util.utcnow
-ENV.globals['as_timestamp'] = dt_util.as_timestamp
+ENV.globals['as_timestamp'] = forgiving_as_timestamp
 ENV.globals['relative_time'] = dt_util.get_age
 ENV.globals['strptime'] = strptime

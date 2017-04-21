@@ -5,7 +5,7 @@ import json
 from unittest.mock import patch
 import pytest
 
-from homeassistant import bootstrap, const, core
+from homeassistant import setup, const, core
 import homeassistant.components as core_components
 from homeassistant.components import (
     emulated_hue, http, light, script, media_player, fan
@@ -33,14 +33,14 @@ def hass_hue(loop, hass):
     loop.run_until_complete(
         core_components.async_setup(hass, {core.DOMAIN: {}}))
 
-    loop.run_until_complete(bootstrap.async_setup_component(
+    loop.run_until_complete(setup.async_setup_component(
         hass, http.DOMAIN,
         {http.DOMAIN: {http.CONF_SERVER_PORT: HTTP_SERVER_PORT}}))
 
     with patch('homeassistant.components'
                '.emulated_hue.UPNPResponderThread'):
         loop.run_until_complete(
-            bootstrap.async_setup_component(hass, emulated_hue.DOMAIN, {
+            setup.async_setup_component(hass, emulated_hue.DOMAIN, {
                 emulated_hue.DOMAIN: {
                     emulated_hue.CONF_LISTEN_PORT: BRIDGE_SERVER_PORT,
                     emulated_hue.CONF_EXPOSE_BY_DEFAULT: True
@@ -48,7 +48,7 @@ def hass_hue(loop, hass):
             }))
 
     loop.run_until_complete(
-        bootstrap.async_setup_component(hass, light.DOMAIN, {
+        setup.async_setup_component(hass, light.DOMAIN, {
             'light': [
                 {
                     'platform': 'demo',
@@ -57,7 +57,7 @@ def hass_hue(loop, hass):
         }))
 
     loop.run_until_complete(
-        bootstrap.async_setup_component(hass, script.DOMAIN, {
+        setup.async_setup_component(hass, script.DOMAIN, {
             'script': {
                 'set_kitchen_light': {
                     'sequence': [
@@ -75,7 +75,7 @@ def hass_hue(loop, hass):
         }))
 
     loop.run_until_complete(
-        bootstrap.async_setup_component(hass, media_player.DOMAIN, {
+        setup.async_setup_component(hass, media_player.DOMAIN, {
             'media_player': [
                 {
                     'platform': 'demo',
@@ -84,7 +84,7 @@ def hass_hue(loop, hass):
         }))
 
     loop.run_until_complete(
-        bootstrap.async_setup_component(hass, fan.DOMAIN, {
+        setup.async_setup_component(hass, fan.DOMAIN, {
             'fan': [
                 {
                     'platform': 'demo',
@@ -301,7 +301,7 @@ def test_put_light_state_fan(hass_hue, hue_client):
         blocking=True)
 
     # Emulated hue converts 0-100% to 0-255.
-    level = 23
+    level = 43
     brightness = round(level * 255 / 100)
 
     fan_result = yield from perform_put_light_state(

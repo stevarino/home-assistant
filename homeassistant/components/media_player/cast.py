@@ -20,7 +20,7 @@ from homeassistant.const import (
 import homeassistant.helpers.config_validation as cv
 import homeassistant.util.dt as dt_util
 
-REQUIREMENTS = ['pychromecast==0.7.6']
+REQUIREMENTS = ['pychromecast==0.8.1']
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,11 +51,13 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
 
     hosts = []
 
-    if discovery_info and discovery_info in KNOWN_HOSTS:
-        return
+    if discovery_info:
+        host = (discovery_info.get('host'), discovery_info.get('port'))
 
-    elif discovery_info:
-        hosts = [discovery_info]
+        if host in KNOWN_HOSTS:
+            return
+
+        hosts = [host]
 
     elif CONF_HOST in config:
         hosts = [(config.get(CONF_HOST), DEFAULT_PORT)]
@@ -226,8 +228,8 @@ class CastDevice(MediaPlayerDevice):
         return self.cast.app_display_name
 
     @property
-    def supported_media_commands(self):
-        """Flag of media commands that are supported."""
+    def supported_features(self):
+        """Flag media player features that are supported."""
         return SUPPORT_CAST
 
     @property

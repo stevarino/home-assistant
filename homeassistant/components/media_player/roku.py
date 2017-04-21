@@ -15,6 +15,7 @@ from homeassistant.components.media_player import (
 from homeassistant.const import (
     CONF_HOST, STATE_IDLE, STATE_PLAYING, STATE_UNKNOWN, STATE_HOME)
 import homeassistant.helpers.config_validation as cv
+import homeassistant.loader as loader
 
 REQUIREMENTS = [
     'https://github.com/bah2830/python-roku/archive/3.1.3.zip'
@@ -22,6 +23,9 @@ REQUIREMENTS = [
 
 KNOWN_HOSTS = []
 DEFAULT_PORT = 8060
+
+NOTIFICATION_ID = 'roku_notification'
+NOTIFICATION_TITLE = 'Roku Media Player Setup'
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,25 +42,40 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     """Setup the Roku platform."""
     hosts = []
 
-    if discovery_info and discovery_info in KNOWN_HOSTS:
-        return
+    if discovery_info:
+        host = discovery_info[0]
 
-    if discovery_info is not None:
-        _LOGGER.debug('Discovered Roku: %s', discovery_info[0])
+        if host in KNOWN_HOSTS:
+            return
+
+        _LOGGER.debug('Discovered Roku: %s', host)
         hosts.append(discovery_info[0])
 
     elif CONF_HOST in config:
         hosts.append(config.get(CONF_HOST))
 
+    persistent_notification = loader.get_component('persistent_notification')
     rokus = []
     for host in hosts:
         new_roku = RokuDevice(host)
 
-        if new_roku.name is None:
+        try:
+            if new_roku.name is not None:
+                rokus.append(RokuDevice(host))
+                KNOWN_HOSTS.append(host)
+            else:
+                _LOGGER.error("Unable to initialize roku at %s", host)
+
+        except AttributeError:
             _LOGGER.error("Unable to initialize roku at %s", host)
-        else:
-            rokus.append(RokuDevice(host))
-            KNOWN_HOSTS.append(host)
+            persistent_notification.create(
+                hass, 'Error: Unable to initialize roku at {}<br />'
+                'Check its network connection or consider '
+                'using auto discovery.<br />'
+                'You will need to restart hass after fixing.'
+                ''.format(config.get(CONF_HOST)),
+                title=NOTIFICATION_TITLE,
+                notification_id=NOTIFICATION_ID)
 
     add_devices(rokus)
 
@@ -106,7 +125,10 @@ class RokuDevice(MediaPlayerDevice):
     @property
     def name(self):
         """Return the name of the device."""
-        return self.device_info.userdevicename
+        if self.device_info.userdevicename:
+            return self.device_info.userdevicename
+        else:
+            return "roku_" + self.roku.device_info.sernum
 
     @property
     def state(self):
@@ -125,8 +147,8 @@ class RokuDevice(MediaPlayerDevice):
         return STATE_UNKNOWN
 
     @property
-    def supported_media_commands(self):
-        """Flag of media commands that are supported."""
+    def supported_features(self):
+        """Flag media player features that are supported."""
         return SUPPORT_ROKU
 
     @property

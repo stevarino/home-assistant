@@ -58,6 +58,7 @@ class GoogleProvider(Provider):
                            "AppleWebKit/537.36 (KHTML, like Gecko) "
                            "Chrome/47.0.2526.106 Safari/537.36")
         }
+        self.name = 'Google'
 
     @property
     def default_language(self):
@@ -86,7 +87,7 @@ class GoogleProvider(Provider):
             url_param = {
                 'ie': 'UTF-8',
                 'tl': language,
-                'q': yarl.quote(part),
+                'q': yarl.quote(part, strict=False),
                 'tk': part_token,
                 'total': len(message_parts),
                 'idx': idx,
@@ -94,7 +95,6 @@ class GoogleProvider(Provider):
                 'textlen': len(part),
             }
 
-            request = None
             try:
                 with async_timeout.timeout(10, loop=self.hass.loop):
                     request = yield from websession.get(
@@ -108,13 +108,9 @@ class GoogleProvider(Provider):
                         return (None, None)
                     data += yield from request.read()
 
-            except (asyncio.TimeoutError, aiohttp.errors.ClientError):
+            except (asyncio.TimeoutError, aiohttp.ClientError):
                 _LOGGER.error("Timeout for google speech.")
                 return (None, None)
-
-            finally:
-                if request is not None:
-                    yield from request.release()
 
         return ("mp3", data)
 

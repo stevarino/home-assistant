@@ -5,14 +5,22 @@
 FROM python:3.5
 MAINTAINER Paulus Schoutsen <Paulus@PaulusSchoutsen.nl>
 
+# Uncomment any of the following lines to disable the installation.
+#ENV INSTALL_TELLSTICK no
+#ENV INSTALL_OPENALPR no
+#ENV INSTALL_FFMPEG no
+#ENV INSTALL_OPENZWAVE no
+#ENV INSTALL_LIBCEC no
+#ENV INSTALL_PHANTOMJS no
+
 VOLUME /config
 
 RUN mkdir -p /usr/src/app
 WORKDIR /usr/src/app
 
 # Copy build scripts
-COPY script/setup_docker_prereqs script/build_python_openzwave script/build_libcec script/
-RUN script/setup_docker_prereqs
+COPY virtualization/Docker/ virtualization/Docker/
+RUN virtualization/Docker/setup_docker_prereqs
 
 # Install hass component dependencies
 COPY requirements_all.txt requirements_all.txt
@@ -22,7 +30,7 @@ RUN pip3 install --no-cache-dir -r requirements_all.txt && \
 # BEGIN: Development additions
 
 # Install nodejs
-RUN curl -sL https://deb.nodesource.com/setup_7.x | sudo -E bash - && \
+RUN curl -sL https://deb.nodesource.com/setup_7.x | bash - && \
     apt-get install -y nodejs
 
 # Install tox

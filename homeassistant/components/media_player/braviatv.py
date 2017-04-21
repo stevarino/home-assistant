@@ -21,8 +21,8 @@ from homeassistant.const import (CONF_HOST, CONF_NAME, STATE_OFF, STATE_ON)
 import homeassistant.helpers.config_validation as cv
 
 REQUIREMENTS = [
-    'https://github.com/aparraga/braviarc/archive/0.3.6.zip'
-    '#braviarc==0.3.6']
+    'https://github.com/aparraga/braviarc/archive/0.3.7.zip'
+    '#braviarc==0.3.7']
 
 BRAVIA_CONFIG_FILE = 'bravia.conf'
 
@@ -316,8 +316,8 @@ class BraviaTVDevice(MediaPlayerDevice):
         return self._muted
 
     @property
-    def supported_media_commands(self):
-        """Flag of media commands that are supported."""
+    def supported_features(self):
+        """Flag media player features that are supported."""
         return SUPPORT_BRAVIA
 
     @property
